@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: leumur
+      POSTGRES_DB: leumur
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate .env using scripts/setup.sh}
+    ports: ["127.0.0.1:55432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leumur -d leumur"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: ["redis_data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    ports: ["127.0.0.1:16333:6333", "127.0.0.1:16334:6334"]
+    volumes: ["qdrant_data:/qdrant/storage"]
+  backend:
+    build:
+      context: ./backend
+      secrets: [ca_bundle]
+    environment:
+      DATABASE_URL: postgresql+psycopg://leumur:${POSTGRES_PASSWORD}@postgres:5432/leumur
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4.1-mini}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,postgres,redis,qdrant,backend
+      SSL_CERT_FILE: /run/secrets/ca_bundle
+      REQUESTS_CA_BUNDLE: /run/secrets/ca_bundle
+      MODEL_CACHE: /models
+      EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-local_semantic}
+    secrets: [ca_bundle]
+    volumes: ["model_cache:/models"]
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      qdrant: {condition: service_started}
+  frontend:
+    build:
+      context: ./frontend
+      secrets: [ca_bundle]
+    environment:
+      API_PROXY_TARGET: http://backend:8000
+    ports: ["127.0.0.1:5173:5173"]
+    depends_on: [backend]
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  model_cache:
+secrets:
+  ca_bundle:
+    file: ${SSL_CERT_FILE:-/etc/ssl/certs/ca-certificates.crt}
